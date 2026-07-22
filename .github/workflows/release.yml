@@ -36,7 +36,7 @@ jobs:
         run: tar -czf cping-${{ matrix.platform }}.tar.gz cping README.md LICENSE
 
       - name: Upload archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cping-${{ matrix.platform }}
           path: cping-${{ matrix.platform }}.tar.gz

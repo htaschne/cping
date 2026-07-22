@@ -11,9 +11,10 @@ make
 make install PREFIX=$HOME/.local
 ```
 
-Or just run it from the repo:
+Or just run it:
 
 ```sh
+make
 ./cping google.com
 ```
 
@@ -107,15 +108,6 @@ make demo
 ```
 
 You will need `asciinema` plus a renderer such as `agg`, `svg-term`, or `termtosvg`.
-
-## Future Fun
-
-- raw ICMP backend
-- sparkline history
-- jitter graph
-- better IPv6 polish
-- JSON output
-- theme options
 
 ## License
 

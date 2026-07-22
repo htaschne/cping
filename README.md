@@ -1,5 +1,8 @@
 # cping
 
+[![Build Status](https://github.com/htaschne/cping/actions/workflows/ci.yml/badge.svg)](https://github.com/htaschne/cping/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/htaschne/cping?label=release)](https://github.com/htaschne/cping/releases/latest)
+
 `cping` is `ping`, but cuter: one live terminal line, a little latency bar, and stats that update while you watch.
 
 ![Animated terminal demo of cping google.com showing the latency bar, packet loss, and final statistics](docs/demo.svg)

@@ -2,12 +2,19 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
   pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   build:
     name: Build and test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    env:
+      BINARY_PATH: ./cping
 
     strategy:
       fail-fast: false
@@ -16,10 +23,25 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Build
         run: make
+
+      - name: Verify executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$BINARY_PATH"
+          test -x "$BINARY_PATH"
+          file "$BINARY_PATH"
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v7
+        with:
+          name: cping-${{ runner.os }}-${{ runner.arch }}
+          path: ${{ env.BINARY_PATH }}
+          if-no-files-found: error
 
       - name: Test
         run: make test
@@ -39,17 +61,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Sanitizer test
         run: make CC=clang sanitize
 
       - name: UndefinedBehaviorSanitizer test
         run: make CC=clang sanitize-undefined
-
-      - name: Upload executable
-        uses: actions/upload-artifact@v4
-        with:
-          name: cping-${{ runner.os }}
-          path: cping
-          if-no-files-found: error

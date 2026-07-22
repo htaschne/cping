@@ -102,6 +102,8 @@ make test
 make install PREFIX=$HOME/.local
 ```
 
+The default build writes the executable to `./cping`.
+
 Audit-oriented targets are optional and not used for release binaries:
 
 ```sh

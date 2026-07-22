@@ -2,96 +2,161 @@ name: Release
 
 on:
   push:
-    branches: [main]
-    tags: ["v*"]
+    tags:
+      - "v*.*.*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  package:
+  build:
     name: Package (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
+    env:
+      BINARY_PATH: ./cping
+      VERSION: ${{ github.ref_name }}
 
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
-            platform: macos
           - os: ubuntu-latest
             platform: linux
+          - os: macos-latest
+            platform: macos
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+
+      - name: Validate tag version
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
 
       - name: Build
-        run: make
+        run: make clean all
 
       - name: Test
         run: make test
 
+      - name: Verify executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$BINARY_PATH"
+          test -x "$BINARY_PATH"
+          file "$BINARY_PATH"
+
+      - name: Determine architecture
+        id: arch
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64|amd64)
+              arch=x86_64
+              ;;
+            arm64|aarch64)
+              arch=arm64
+              ;;
+            *)
+              arch="$(uname -m)"
+              ;;
+          esac
+          echo "arch=$arch" >> "$GITHUB_OUTPUT"
+
       - name: Create archive
-        run: tar -czf cping-${{ matrix.platform }}.tar.gz cping README.md LICENSE
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          archive="$(scripts/package-release.sh "$VERSION" "${{ matrix.platform }}" "${{ steps.arch.outputs.arch }}" "$BINARY_PATH" dist)"
+          test -f "$archive"
+          test "$(find dist -maxdepth 1 -type f -name '*.tar.gz' | wc -l | tr -d ' ')" = "1"
+          tar -tzf "$archive"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=release-${{ matrix.platform }}-${{ steps.arch.outputs.arch }}" >> "$GITHUB_OUTPUT"
 
       - name: Upload archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: cping-${{ matrix.platform }}
-          path: cping-${{ matrix.platform }}.tar.gz
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: ${{ steps.package.outputs.archive }}
           if-no-files-found: error
 
   release:
     name: Publish GitHub Release
-    needs: package
+    needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ github.ref_name }}
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Download archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
-          pattern: cping-*
+          pattern: release-*
           merge-multiple: true
 
-      - name: Pick release version
-        id: version
+      - name: Verify release archives
         shell: bash
         run: |
           set -euo pipefail
-          tag="$(git tag --points-at HEAD | sort -V | tail -n 1)"
-          if [[ -n "$tag" ]]; then
-            echo "version=$tag" >> "$GITHUB_OUTPUT"
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
-            echo "notes=Release $tag" >> "$GITHUB_OUTPUT"
-          else
-            short_sha="${GITHUB_SHA::7}"
-            echo "version=sha-$short_sha" >> "$GITHUB_OUTPUT"
-            echo "prerelease=true" >> "$GITHUB_OUTPUT"
-            echo "notes=Prerelease build from commit $GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
+          shopt -s nullglob
+          archives=(dist/cping-"$VERSION"-*.tar.gz)
+          if [[ "${#archives[@]}" -ne 2 ]]; then
+            echo "expected exactly 2 release archives, found ${#archives[@]}" >&2
+            find dist -maxdepth 2 -type f -print >&2
+            exit 1
           fi
+          for archive in "${archives[@]}"; do
+            case "$(basename "$archive")" in
+              cping-"$VERSION"-linux-*.tar.gz|cping-"$VERSION"-macos-*.tar.gz)
+                ;;
+              *)
+                echo "unexpected archive name: $archive" >&2
+                exit 1
+                ;;
+            esac
+            tar -tzf "$archive" | sort > "$archive.contents"
+            printf '%s\n' LICENSE README.md cping | diff -u - "$archive.contents"
+          done
 
-      - name: Create GitHub release
+      - name: Create or update GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
-          PRERELEASE: ${{ steps.version.outputs.prerelease }}
-          NOTES: ${{ steps.version.outputs.notes }}
         shell: bash
         run: |
           set -euo pipefail
+          shopt -s nullglob
+          archives=(dist/cping-"$VERSION"-*.tar.gz)
+          if [[ "${#archives[@]}" -eq 0 ]]; then
+            echo "no release archives found" >&2
+            exit 1
+          fi
+          notes="Release $VERSION"
           args=()
-          if [[ "$PRERELEASE" == "true" ]]; then
+          if [[ "$VERSION" == *-* || "$VERSION" == *.*.*.* ]]; then
             args+=(--prerelease)
           fi
-          gh release create "$VERSION" dist/cping-*.tar.gz \
-            --target "$GITHUB_SHA" \
-            --title "$VERSION" \
-            --notes "$NOTES" \
-            "${args[@]}"
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release upload "$VERSION" "${archives[@]}" --clobber
+          else
+            gh release create "$VERSION" "${archives[@]}" \
+              --target "$GITHUB_SHA" \
+              --title "$VERSION" \
+              --notes "$notes" \
+              "${args[@]}"
+          fi

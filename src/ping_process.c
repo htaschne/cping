@@ -1,6 +1,7 @@
 #include "ping_process.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,6 +26,19 @@ static void format_double(char *buf, size_t len, double value) {
 
 static void format_long(char *buf, size_t len, long value) {
     snprintf(buf, len, "%ld", value);
+}
+
+static int set_close_on_exec(int fd, char *errbuf, int errbuf_len) {
+    int flags = fcntl(fd, F_GETFD);
+    if (flags < 0) {
+        snprintf(errbuf, (size_t)errbuf_len, "fcntl(F_GETFD) failed: %s", strerror(errno));
+        return -1;
+    }
+    if (fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0) {
+        snprintf(errbuf, (size_t)errbuf_len, "fcntl(F_SETFD) failed: %s", strerror(errno));
+        return -1;
+    }
+    return 0;
 }
 
 static void build_ping_argv(const PingOptions *options,
@@ -89,6 +103,12 @@ int ping_process_start(const PingOptions *options, PingProcess *process, char *e
         snprintf(errbuf, (size_t)errbuf_len, "pipe failed: %s", strerror(errno));
         return -1;
     }
+    if (set_close_on_exec(pipefd[0], errbuf, errbuf_len) != 0 ||
+        set_close_on_exec(pipefd[1], errbuf, errbuf_len) != 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return -1;
+    }
 
     build_ping_argv(options, argv, &argc, interval_buf, count_buf, timeout_buf);
 
@@ -102,10 +122,15 @@ int ping_process_start(const PingOptions *options, PingProcess *process, char *e
 
     if (pid == 0) {
         close(pipefd[0]);
-        dup2(pipefd[1], STDOUT_FILENO);
-        dup2(pipefd[1], STDERR_FILENO);
+        if (dup2(pipefd[1], STDOUT_FILENO) < 0 || dup2(pipefd[1], STDERR_FILENO) < 0) {
+            fprintf(stderr, "dup2 failed: %s\n", strerror(errno));
+            _exit(127);
+        }
         close(pipefd[1]);
-        setenv("LC_ALL", "C", 1);
+        if (setenv("LC_ALL", "C", 1) != 0) {
+            fprintf(stderr, "setenv failed: %s\n", strerror(errno));
+            _exit(127);
+        }
         execvp("ping", argv);
         fprintf(stderr, "exec ping failed: %s\n", strerror(errno));
         _exit(127);
@@ -120,8 +145,9 @@ int ping_process_start(const PingOptions *options, PingProcess *process, char *e
 void ping_process_terminate(PingProcess *process) {
     int status;
     if (process->pid > 0) {
-        kill(process->pid, SIGTERM);
-        while (waitpid(process->pid, &status, 0) < 0 && errno == EINTR) {
+        if (kill(process->pid, SIGTERM) == 0 || errno == ESRCH) {
+            while (waitpid(process->pid, &status, 0) < 0 && errno == EINTR) {
+            }
         }
         process->pid = -1;
     }

@@ -10,12 +10,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/select.h>
-#include <sys/time.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
-#define CPING_VERSION "0.1.0"
+#define CPING_VERSION "0.1.1"
 
 typedef struct {
     double interval;
@@ -315,14 +314,22 @@ static void process_line(char *line,
     }
 }
 
-static void install_signal_handlers(void) {
-    struct sigaction action;
-    memset(&action, 0, sizeof(action));
+static int install_signal_handlers(void) {
+    struct sigaction action = {0};
     action.sa_handler = handle_signal;
-    sigemptyset(&action.sa_mask);
-    sigaction(SIGINT, &action, NULL);
-    sigaction(SIGTERM, &action, NULL);
-    sigaction(SIGWINCH, &action, NULL);
+    if (sigemptyset(&action.sa_mask) != 0) {
+        return -1;
+    }
+    if (sigaction(SIGINT, &action, NULL) != 0) {
+        return -1;
+    }
+    if (sigaction(SIGTERM, &action, NULL) != 0) {
+        return -1;
+    }
+    if (sigaction(SIGWINCH, &action, NULL) != 0) {
+        return -1;
+    }
+    return 0;
 }
 
 int main(int argc, char **argv) {
@@ -362,7 +369,11 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    install_signal_handlers();
+    if (install_signal_handlers() != 0) {
+        fprintf(stderr, "cping: failed to install signal handlers: %s\n", strerror(errno));
+        ping_process_terminate(&process);
+        return 1;
+    }
     terminal_hide_cursor(&term);
 
     while (!child_done) {
@@ -375,7 +386,11 @@ int main(int argc, char **argv) {
         }
 
         if (g_stop_requested) {
-            kill(process.pid, SIGTERM);
+            if (kill(process.pid, SIGTERM) != 0 && errno != ESRCH) {
+                fprintf(stderr, "cping: failed to terminate ping: %s\n", strerror(errno));
+                exit_code = 1;
+                break;
+            }
         }
 
         FD_ZERO(&rfds);
@@ -430,7 +445,10 @@ int main(int argc, char **argv) {
         int status = 0;
         pid_t waited = waitpid(process.pid, &status, WNOHANG);
         if (waited == 0) {
-            kill(process.pid, SIGTERM);
+            if (kill(process.pid, SIGTERM) != 0 && errno != ESRCH) {
+                fprintf(stderr, "cping: failed to terminate ping: %s\n", strerror(errno));
+                exit_code = 1;
+            }
             while (waitpid(process.pid, &status, 0) < 0 && errno == EINTR) {
             }
         } else if (waited < 0 && errno != ECHILD) {

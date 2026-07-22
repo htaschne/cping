@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="264" viewBox="0 0 920 264" role="img" aria-labelledby="title desc">
+  <title id="title">cping google.com terminal demo</title>
+  <desc id="desc">Terminal demo generated from a real cping google.com run showing an animated latency bar, current latency, standard deviation, sample count, packet loss, and final statistics.</desc>
+  <style>
+    .window { fill: #111317; }
+    .bar { fill: #20242b; }
+    .red { fill: #ff5f57; }
+    .yellow { fill: #ffbd2e; }
+    .green { fill: #28c840; }
+    .text { font: 16px ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; fill: #e7e9ee; }
+    .muted { fill: #a6adb9; }
+    .ok { fill: #67d58b; }
+  </style>
+  <rect x="0" y="0" width="920" height="264" rx="8" class="window"/>
+  <rect x="0" y="0" width="920" height="34" rx="8" class="bar"/>
+  <circle cx="22" cy="17" r="6" class="red"/>
+  <circle cx="42" cy="17" r="6" class="yellow"/>
+  <circle cx="62" cy="17" r="6" class="green"/>
+  <text x="86" y="22" class="text muted">cping google.com</text>
+  <text x="28" y="72" class="text">$ cping google.com</text>
+  <g class="text">
+    <text x="28" y="118">
+      <tspan>google.com [</tspan>
+      <tspan class="ok">###</tspan><tspan class="muted">-------------</tspan>
+      <tspan>] 36.94 ms  sigma 0.00 ms  n=1  0.0% loss</tspan>
+      <animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.10;0.11;1" dur="8s" repeatCount="indefinite"/>
+    </text>
+    <text x="28" y="118" opacity="0">
+      <tspan>google.com [</tspan>
+      <tspan class="ok">###</tspan><tspan class="muted">-------------</tspan>
+      <tspan>] 40.19 ms  sigma 2.30 ms  n=2  0.0% loss</tspan>
+      <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.11;0.21;0.22;1" dur="8s" repeatCount="indefinite"/>
+    </text>
+    <text x="28" y="118" opacity="0">
+      <tspan>google.com [</tspan>
+      <tspan class="ok">###</tspan><tspan class="muted">-------------</tspan>
+      <tspan>] 36.13 ms  sigma 2.15 ms  n=3  0.0% loss</tspan>
+      <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.22;0.23;0.33;0.34;1" dur="8s" repeatCount="indefinite"/>
+    </text>
+    <text x="28" y="118" opacity="0">
+      <tspan>google.com [</tspan>
+      <tspan class="ok">###</tspan><tspan class="muted">-------------</tspan>
+      <tspan>] 38.31 ms  sigma 1.78 ms  n=4  0.0% loss</tspan>
+      <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.34;0.35;0.45;0.46;1" dur="8s" repeatCount="indefinite"/>
+    </text>
+    <text x="28" y="118" opacity="0">
+      <tspan>google.com [</tspan>
+      <tspan class="ok">###</tspan><tspan class="muted">-------------</tspan>
+      <tspan>] 40.48 ms  sigma 1.93 ms  n=5  0.0% loss</tspan>
+      <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.46;0.47;0.57;0.58;1" dur="8s" repeatCount="indefinite"/>
+    </text>
+    <text x="28" y="118" opacity="0">
+      <tspan>google.com [</tspan>
+      <tspan class="ok">###</tspan><tspan class="muted">-------------</tspan>
+      <tspan>] 39.72 ms  sigma 1.80 ms  n=6  0.0% loss</tspan>
+      <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.58;0.59;0.69;0.70;1" dur="8s" repeatCount="indefinite"/>
+    </text>
+    <text x="28" y="118" opacity="0">
+      <tspan>google.com [</tspan>
+      <tspan class="ok">###</tspan><tspan class="muted">-------------</tspan>
+      <tspan>] 37.39 ms  sigma 1.71 ms  n=7  0.0% loss</tspan>
+      <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.70;0.71;0.75;0.76;1" dur="8s" repeatCount="indefinite"/>
+    </text>
+    <text x="28" y="118" opacity="0">
+      <tspan>google.com [</tspan>
+      <tspan class="ok">###</tspan><tspan class="muted">-------------</tspan>
+      <tspan>] 42.93 ms  sigma 2.24 ms  n=8  0.0% loss</tspan>
+      <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.76;0.77;0.83;0.84;1" dur="8s" repeatCount="indefinite"/>
+    </text>
+    <text x="28" y="118" opacity="0">
+      <tspan>google.com [</tspan>
+      <tspan class="ok">######</tspan><tspan class="muted">----------</tspan>
+      <tspan>] 78.86 ms  sigma 13.45 ms  n=9  0.0% loss</tspan>
+      <animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.84;0.85;0.96;1" dur="8s" repeatCount="indefinite"/>
+    </text>
+  </g>
+  <text x="28" y="166" class="text muted">^C</text>
+  <text x="28" y="194" class="text muted">--- google.com latency statistics ---</text>
+  <text x="28" y="222" class="text muted">9 probes, 9 replies, 0.0% packet loss</text>
+  <text x="28" y="250" class="text muted">rtt min/avg/max/stddev = 36.13/43.44/78.86/13.45 ms</text>
+</svg>

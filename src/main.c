@@ -1,10 +1,14 @@
 #include "parser.h"
+#include "line_reader.h"
 #include "ping_process.h"
 #include "stats.h"
 #include "terminal.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <getopt.h>
+#include <limits.h>
+#include <math.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,13 +16,16 @@
 #include <sys/select.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #define CPING_VERSION "0.1.1"
+#define CPING_MAX_HOST_DISPLAY 256U
+#define CPING_MAX_HOST_LEN 1024U
 
 typedef struct {
     double interval;
-    long count;
+    unsigned long count;
     double max_latency;
     double timeout;
     int force_ipv4;
@@ -26,22 +33,34 @@ typedef struct {
     int ascii;
     int no_color;
     const char *host;
+    char display_host[CPING_MAX_HOST_DISPLAY];
 } Options;
 
 typedef struct {
-    long received;
-    long transmitted;
+    unsigned long received;
+    unsigned long transmitted;
     int saw_sequence;
-    long first_sequence;
-    long max_sequence;
+    unsigned long first_sequence;
+    unsigned long max_sequence;
 } ProbeCounts;
+
+typedef struct {
+    const Terminal *term;
+    const Options *options;
+    Stats *stats;
+    ProbeCounts *counts;
+} ProcessLineContext;
 
 static volatile sig_atomic_t g_stop_requested = 0;
 static volatile sig_atomic_t g_resize_requested = 0;
+static volatile sig_atomic_t g_output_closed = 0;
 
 static void handle_signal(int signal_number) {
     if (signal_number == SIGWINCH) {
         g_resize_requested = 1;
+    } else if (signal_number == SIGPIPE) {
+        g_output_closed = 1;
+        g_stop_requested = signal_number;
     } else {
         g_stop_requested = signal_number;
     }
@@ -67,7 +86,7 @@ static int parse_double_arg(const char *text, const char *name, double *value, i
     char *end = NULL;
     errno = 0;
     double parsed = strtod(text, &end);
-    if (errno != 0 || end == text || *end != '\0') {
+    if (errno == ERANGE || end == text || *end != '\0' || !isfinite(parsed)) {
         fprintf(stderr, "cping: invalid %s: %s\n", name, text);
         return 0;
     }
@@ -79,20 +98,60 @@ static int parse_double_arg(const char *text, const char *name, double *value, i
     return 1;
 }
 
-static int parse_long_arg(const char *text, const char *name, long *value) {
+static int parse_count_arg(const char *text, const char *name, unsigned long *value) {
     char *end = NULL;
+    unsigned long parsed;
+
+    if (text[0] == '-') {
+        fprintf(stderr, "cping: %s must be greater than zero\n", name);
+        return 0;
+    }
     errno = 0;
-    long parsed = strtol(text, &end, 10);
-    if (errno != 0 || end == text || *end != '\0') {
+    parsed = strtoul(text, &end, 10);
+    if (errno == ERANGE || end == text || *end != '\0') {
         fprintf(stderr, "cping: invalid %s: %s\n", name, text);
         return 0;
     }
-    if (parsed <= 0) {
+    if (parsed == 0) {
         fprintf(stderr, "cping: %s must be greater than zero\n", name);
         return 0;
     }
     *value = parsed;
     return 1;
+}
+
+static int host_is_safe_operand(const char *host) {
+    size_t i;
+    size_t len = strlen(host);
+
+    if (len == 0 || len > CPING_MAX_HOST_LEN || host[0] == '-') {
+        return 0;
+    }
+    for (i = 0; i < len; i++) {
+        unsigned char ch = (unsigned char)host[i];
+        if (iscntrl(ch) || isspace(ch)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void sanitize_display_string(const char *src, char *dst, size_t dst_len) {
+    size_t used = 0;
+    size_t i;
+
+    if (dst_len == 0) {
+        return;
+    }
+    for (i = 0; src[i] != '\0' && used + 1 < dst_len; i++) {
+        unsigned char ch = (unsigned char)src[i];
+        if (ch >= 0x20U && ch != 0x7FU) {
+            dst[used++] = (char)ch;
+        } else if (used + 2 < dst_len) {
+            dst[used++] = '?';
+        }
+    }
+    dst[used] = '\0';
 }
 
 static int parse_options(int argc, char **argv, Options *options) {
@@ -127,7 +186,7 @@ static int parse_options(int argc, char **argv, Options *options) {
             }
             break;
         case 'c':
-            if (!parse_long_arg(optarg, "count", &options->count)) {
+            if (!parse_count_arg(optarg, "count", &options->count)) {
                 return 0;
             }
             break;
@@ -180,14 +239,26 @@ static int parse_options(int argc, char **argv, Options *options) {
     }
 
     options->host = argv[optind];
+    if (!host_is_safe_operand(options->host)) {
+        fprintf(stderr, "cping: unsafe host operand\n");
+        return 0;
+    }
+    sanitize_display_string(options->host, options->display_host, sizeof(options->display_host));
     return 1;
 }
 
 static int choose_bar_width(const Terminal *term, const char *host) {
     int preferred = 30;
     int minimum = 10;
-    int reserved = (int)strlen(host) + 54;
-    int available = term->width - reserved;
+    size_t host_len = strlen(host);
+    int reserved;
+    int available;
+
+    if (host_len > 200U) {
+        host_len = 200U;
+    }
+    reserved = (int)host_len + 54;
+    available = term->width > reserved ? term->width - reserved : 0;
 
     if (!term->is_tty) {
         return preferred;
@@ -201,23 +272,28 @@ static int choose_bar_width(const Terminal *term, const char *host) {
     return minimum;
 }
 
-static long counts_transmitted(const ProbeCounts *counts) {
+static unsigned long counts_transmitted(const ProbeCounts *counts) {
     if (counts->saw_sequence) {
-        long from_sequence = counts->max_sequence - counts->first_sequence + 1;
+        unsigned long from_sequence = counts->max_sequence >= counts->first_sequence
+                                          ? counts->max_sequence - counts->first_sequence + 1UL
+                                          : counts->transmitted;
         return from_sequence > counts->transmitted ? from_sequence : counts->transmitted;
     }
     return counts->transmitted > 0 ? counts->transmitted : counts->received;
 }
 
 static double packet_loss_percent(const ProbeCounts *counts) {
-    long transmitted = counts_transmitted(counts);
-    if (transmitted <= 0) {
+    unsigned long transmitted = counts_transmitted(counts);
+    if (transmitted == 0) {
+        return 0.0;
+    }
+    if (counts->received >= transmitted) {
         return 0.0;
     }
     return 100.0 * (double)(transmitted - counts->received) / (double)transmitted;
 }
 
-static void observe_sequence(ProbeCounts *counts, long sequence) {
+static void observe_sequence(ProbeCounts *counts, unsigned long sequence) {
     if (!counts->saw_sequence) {
         counts->saw_sequence = 1;
         counts->first_sequence = sequence;
@@ -227,6 +303,9 @@ static void observe_sequence(ProbeCounts *counts, long sequence) {
     }
     if (sequence > counts->max_sequence) {
         counts->max_sequence = sequence;
+    }
+    if (counts->transmitted != ULONG_MAX) {
+        counts->transmitted++;
     }
     counts->transmitted = counts_transmitted(counts);
 }
@@ -247,8 +326,8 @@ static void render_sample(const Terminal *term,
 
     if (term->is_tty) {
         terminal_clear_line(term);
-        printf("%s %s%s%s %.2f ms  sigma %.2f ms  n=%ld  %s%.1f%%%s loss",
-               options->host,
+        printf("%s %s%s%s %.2f ms  sigma %.2f ms  n=%lu  %s%.1f%%%s loss",
+               options->display_host,
                latency_color,
                bar,
                reset,
@@ -261,10 +340,9 @@ static void render_sample(const Terminal *term,
         if (term->width >= 105 && stats->count > 0) {
             printf("  min/avg/max %.2f/%.2f/%.2f ms", stats->min, stats->mean, stats->max);
         }
-        fflush(stdout);
     } else {
-        printf("%s rtt=%.3f ms stddev=%.3f ms samples=%ld loss=%.1f%%",
-               options->host,
+        printf("%s rtt=%.3f ms stddev=%.3f ms samples=%lu loss=%.1f%%",
+               options->display_host,
                latest_ms,
                stats_stddev(stats),
                counts->received,
@@ -273,16 +351,25 @@ static void render_sample(const Terminal *term,
             printf(" min=%.3f avg=%.3f max=%.3f", stats->min, stats->mean, stats->max);
         }
         fputc('\n', stdout);
-        fflush(stdout);
+    }
+    if (fflush(stdout) == EOF || ferror(stdout)) {
+        g_output_closed = 1;
+        g_stop_requested = SIGPIPE;
+    }
+}
+
+static void bump_received(ProbeCounts *counts) {
+    if (counts->received != ULONG_MAX) {
+        counts->received++;
     }
 }
 
 static void print_summary(const Options *options, const Stats *stats, const ProbeCounts *counts) {
-    long transmitted = counts_transmitted(counts);
+    unsigned long transmitted = counts_transmitted(counts);
     double loss = packet_loss_percent(counts);
 
-    printf("--- %s latency statistics ---\n", options->host);
-    printf("%ld probes, %ld replies, %.1f%% packet loss\n", transmitted, counts->received, loss);
+    printf("--- %s latency statistics ---\n", options->display_host);
+    printf("%lu probes, %lu replies, %.1f%% packet loss\n", transmitted, counts->received, loss);
     if (stats->count > 0) {
         printf("rtt min/avg/max/stddev = %.2f/%.2f/%.2f/%.2f ms\n",
                stats->min,
@@ -294,24 +381,83 @@ static void print_summary(const Options *options, const Stats *stats, const Prob
     }
 }
 
-static void process_line(char *line,
+static void process_line(const char *line,
+                         size_t len,
+                         int truncated,
                          const Terminal *term,
                          const Options *options,
                          Stats *stats,
                          ProbeCounts *counts) {
     PingReply reply;
-    if (parse_ping_reply(line, &reply)) {
+
+    if (truncated) {
+        return;
+    }
+
+    if (parse_ping_reply_len(line, len, &reply)) {
         if (reply.has_sequence) {
             observe_sequence(counts, reply.sequence);
-        } else {
+        } else if (counts->transmitted != ULONG_MAX) {
             counts->transmitted++;
         }
-        counts->received++;
-        stats_add(stats, reply.latency_ms);
-        render_sample(term, options, stats, counts, reply.latency_ms);
+        if (stats_add(stats, reply.latency_ms)) {
+            bump_received(counts);
+            render_sample(term, options, stats, counts, reply.latency_ms);
+        }
     } else if (reply.has_sequence) {
         observe_sequence(counts, reply.sequence);
     }
+}
+
+static void process_line_callback(const char *line, size_t len, int truncated, void *context) {
+    ProcessLineContext *ctx = (ProcessLineContext *)context;
+    process_line(line, len, truncated, ctx->term, ctx->options, ctx->stats, ctx->counts);
+}
+
+static void sleep_milliseconds(long milliseconds) {
+    struct timespec requested;
+    struct timespec remaining;
+
+    requested.tv_sec = milliseconds / 1000L;
+    requested.tv_nsec = (milliseconds % 1000L) * 1000000L;
+    while (nanosleep(&requested, &remaining) != 0 && errno == EINTR) {
+        requested = remaining;
+    }
+}
+
+static int wait_for_child_exit(pid_t pid, int *status, int terminate, int *forced_kill) {
+    int attempts;
+
+    *forced_kill = 0;
+    for (attempts = 0; attempts < 50; attempts++) {
+        pid_t waited = waitpid(pid, status, WNOHANG);
+        if (waited == pid) {
+            return 0;
+        }
+        if (waited < 0) {
+            return errno == ECHILD ? 0 : -1;
+        }
+        if (attempts == 0 && terminate) {
+            if (kill(pid, SIGTERM) != 0 && errno != ESRCH) {
+                return -1;
+            }
+        }
+        sleep_milliseconds(20L);
+    }
+
+    if (terminate) {
+        if (kill(pid, SIGKILL) != 0 && errno != ESRCH) {
+            return -1;
+        }
+        *forced_kill = 1;
+        while (waitpid(pid, status, 0) < 0) {
+            if (errno != EINTR) {
+                return errno == ECHILD ? 0 : -1;
+            }
+        }
+        return 0;
+    }
+    return 1;
 }
 
 static int install_signal_handlers(void) {
@@ -329,6 +475,9 @@ static int install_signal_handlers(void) {
     if (sigaction(SIGWINCH, &action, NULL) != 0) {
         return -1;
     }
+    if (sigaction(SIGPIPE, &action, NULL) != 0) {
+        return -1;
+    }
     return 0;
 }
 
@@ -339,12 +488,11 @@ int main(int argc, char **argv) {
     Terminal term;
     Stats stats;
     ProbeCounts counts;
+    LineReader reader;
+    ProcessLineContext line_context;
     char errbuf[256];
-    char readbuf[1024];
-    char linebuf[4096];
-    size_t line_len = 0;
+    unsigned char readbuf[1024];
     int child_status = 0;
-    int child_done = 0;
     int exit_code = 0;
 
     if (!parse_options(argc, argv, &options)) {
@@ -353,7 +501,12 @@ int main(int argc, char **argv) {
 
     terminal_init(&term, options.ascii, options.no_color);
     stats_init(&stats);
+    line_reader_init(&reader);
     memset(&counts, 0, sizeof(counts));
+    line_context.term = &term;
+    line_context.options = &options;
+    line_context.stats = &stats;
+    line_context.counts = &counts;
 
     ping_options.interval = options.interval;
     ping_options.count = options.count;
@@ -376,7 +529,7 @@ int main(int argc, char **argv) {
     }
     terminal_hide_cursor(&term);
 
-    while (!child_done) {
+    while (!g_output_closed) {
         fd_set rfds;
         int ready;
 
@@ -385,7 +538,7 @@ int main(int argc, char **argv) {
             g_resize_requested = 0;
         }
 
-        if (g_stop_requested) {
+        if (g_stop_requested && process.pid > 0) {
             if (kill(process.pid, SIGTERM) != 0 && errno != ESRCH) {
                 fprintf(stderr, "cping: failed to terminate ping: %s\n", strerror(errno));
                 exit_code = 1;
@@ -416,25 +569,15 @@ int main(int argc, char **argv) {
                 break;
             }
             if (nread == 0) {
-                child_done = 1;
                 break;
             }
 
-            for (ssize_t i = 0; i < nread; i++) {
-                if (readbuf[i] == '\n') {
-                    linebuf[line_len] = '\0';
-                    process_line(linebuf, &term, &options, &stats, &counts);
-                    line_len = 0;
-                } else if (line_len + 1 < sizeof(linebuf)) {
-                    linebuf[line_len++] = readbuf[i];
-                }
-            }
+            line_reader_feed(&reader, readbuf, (size_t)nread, process_line_callback, &line_context);
         }
     }
 
-    if (line_len > 0) {
-        linebuf[line_len] = '\0';
-        process_line(linebuf, &term, &options, &stats, &counts);
+    if (!g_output_closed) {
+        line_reader_finish(&reader, process_line_callback, &line_context);
     }
 
     if (process.fd >= 0) {
@@ -443,25 +586,28 @@ int main(int argc, char **argv) {
     }
     if (process.pid > 0) {
         int status = 0;
-        pid_t waited = waitpid(process.pid, &status, WNOHANG);
-        if (waited == 0) {
-            if (kill(process.pid, SIGTERM) != 0 && errno != ESRCH) {
-                fprintf(stderr, "cping: failed to terminate ping: %s\n", strerror(errno));
-                exit_code = 1;
-            }
-            while (waitpid(process.pid, &status, 0) < 0 && errno == EINTR) {
-            }
-        } else if (waited < 0 && errno != ECHILD) {
-            status = 0;
+        int forced_kill = 0;
+        int wait_result = wait_for_child_exit(process.pid, &status, 1, &forced_kill);
+        if (wait_result != 0) {
+            fprintf(stderr, "cping: failed to reap ping: %s\n", strerror(errno));
+            exit_code = 1;
+        }
+        if (forced_kill && exit_code == 0) {
+            exit_code = 1;
         }
         child_status = status;
         process.pid = -1;
     }
 
-    terminal_show_cursor(&term);
-    terminal_finish_line(&term);
-    print_summary(&options, &stats, &counts);
+    if (!g_output_closed) {
+        terminal_show_cursor(&term);
+        terminal_finish_line(&term);
+        print_summary(&options, &stats, &counts);
+    }
 
+    if (g_output_closed) {
+        return 0;
+    }
     if (g_stop_requested == SIGINT) {
         return 130;
     }

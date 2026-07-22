@@ -1,6 +1,7 @@
 #include "terminal.h"
 
 #include <locale.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,14 +22,14 @@ static int terminal_supports_unicode(void) {
     if (!locale) {
         return 0;
     }
-    return strstr(locale, "UTF-8") || strstr(locale, "utf8") || strstr(locale, "UTF8");
+    return strstr(locale, "UTF-8") != NULL || strstr(locale, "utf8") != NULL || strstr(locale, "UTF8") != NULL;
 }
 
 void terminal_refresh_size(Terminal *term) {
     struct winsize ws;
     term->width = 80;
     if (term->is_tty && ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
-        term->width = ws.ws_col;
+        term->width = ws.ws_col > 1000U ? 1000 : (int)ws.ws_col;
     }
 }
 
@@ -87,10 +88,10 @@ void terminal_make_bar(char *buf, size_t buflen, int width, double value, double
         return;
     }
 
-    if (value < 0.0) {
+    if (!isfinite(value) || value < 0.0) {
         value = 0.0;
     }
-    if (ceiling <= 0.0) {
+    if (!isfinite(ceiling) || ceiling <= 0.0) {
         ceiling = 1.0;
     }
 
@@ -99,23 +100,26 @@ void terminal_make_bar(char *buf, size_t buflen, int width, double value, double
         filled = width;
     }
 
-    if (used + 1 < buflen) {
+    if (used + 1U < buflen) {
         buf[used++] = '[';
     }
-    for (i = 0; i < width && used + fill_len + 1 < buflen; i++) {
+    for (i = 0; i < width; i++) {
         const char *part = i < filled ? fill : empty;
         size_t part_len = i < filled ? fill_len : empty_len;
+        if (used + part_len + 2U > buflen) {
+            break;
+        }
         memcpy(buf + used, part, part_len);
         used += part_len;
     }
-    if (used + 1 < buflen) {
+    if (used + 1U < buflen) {
         buf[used++] = ']';
     }
     buf[used < buflen ? used : buflen - 1] = '\0';
 }
 
 const char *terminal_color_for_latency(double value, double ceiling) {
-    double ratio = ceiling > 0.0 ? value / ceiling : 1.0;
+    double ratio = isfinite(value) && isfinite(ceiling) && ceiling > 0.0 ? value / ceiling : 1.0;
     if (ratio < 0.4) {
         return "\033[32m";
     }

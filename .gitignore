@@ -10,6 +10,12 @@ build/
 bin/
 dist/
 cping
+tests/cping-integration
+tests/fuzz_parser
+tests/test_line_reader
+tests/test_parser
+tests/test_stats
+tests/test_terminal
 *.o
 *.obj
 *.a
@@ -17,6 +23,7 @@ cping
 *.dylib
 *.dll
 *.exe
+*.dSYM/
 
 # Test artifacts
 coverage/
@@ -28,6 +35,7 @@ coverage/
 *.swp
 *.tmp
 *.log
+*.plist
 
 # Terminal demo intermediates
 docs/*.tmp.cast

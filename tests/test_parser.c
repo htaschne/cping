@@ -33,6 +33,25 @@ int main(void) {
     check_close(reply.latency_ms, 0.5, "less-than latency uses midpoint");
 
     check(!parse_ping_reply("Request timeout for icmp_seq 3", &reply), "timeout is not a sample");
+    check(reply.has_sequence && reply.sequence == 3UL, "timeout sequence parses");
+
+    check(!parse_ping_reply("", &reply), "empty line rejected");
+    check(!parse_ping_reply("64 bytes from host time=", &reply), "empty time rejected");
+    check(!parse_ping_reply("64 bytes from host time=.", &reply), "dot time rejected");
+    check(!parse_ping_reply("64 bytes from host time=1.2.3 ms", &reply), "multi-dot time rejected");
+    check(!parse_ping_reply("64 bytes from host time=-1 ms", &reply), "negative time rejected");
+    check(!parse_ping_reply("64 bytes from host time=nan ms", &reply), "nan rejected");
+    check(!parse_ping_reply("64 bytes from host time=inf ms", &reply), "inf rejected");
+    check(!parse_ping_reply("64 bytes from host time=1e9999 ms", &reply), "overflowing exponent rejected");
+    check(!parse_ping_reply("64 bytes from host time=999999999 ms", &reply), "huge rtt rejected");
+    check(!parse_ping_reply("64 bytes from host uptime=1 time=bad ms", &reply), "bad time rejected");
+
+    {
+        const char nul_line[] = {'6', '4', ' ', 't', 'i', 'm', 'e', '=', '1', '\0', '2'};
+        check(!parse_ping_reply_len(nul_line, sizeof(nul_line), &reply), "embedded nul rejected");
+    }
+    check(parse_ping_reply("64 bytes from host: icmp_seq=4294967295 ttl=64 time=1 ms", &reply), "large sequence parses");
+    check(reply.has_sequence && reply.sequence == 4294967295UL, "large sequence value");
 
     puts("test_parser: ok");
     return 0;

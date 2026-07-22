@@ -1,5 +1,6 @@
 #include "stats.h"
 
+#include <stddef.h>
 #include <math.h>
 
 void stats_init(Stats *stats) {
@@ -10,14 +11,17 @@ void stats_init(Stats *stats) {
     stats->max = 0.0;
 }
 
-void stats_add(Stats *stats, double value) {
+int stats_add(Stats *stats, double value) {
+    if (!isfinite(value) || stats->count == (size_t)-1) {
+        return 0;
+    }
     stats->count++;
     if (stats->count == 1) {
         stats->mean = value;
         stats->m2 = 0.0;
         stats->min = value;
         stats->max = value;
-        return;
+        return 1;
     }
 
     if (value < stats->min) {
@@ -31,6 +35,11 @@ void stats_add(Stats *stats, double value) {
     stats->mean += delta / (double)stats->count;
     double delta2 = value - stats->mean;
     stats->m2 += delta * delta2;
+    if (!isfinite(stats->mean) || !isfinite(stats->m2)) {
+        stats->count--;
+        return 0;
+    }
+    return 1;
 }
 
 double stats_stddev(const Stats *stats) {

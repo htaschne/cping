@@ -24,6 +24,29 @@ jobs:
       - name: Test
         run: make test
 
+      - name: Strict warning build
+        run: make strict
+
+      - name: Static analysis
+        run: make analyze
+
+      - name: Fuzz smoke
+        run: make fuzz-smoke
+
+  sanitize:
+    name: Sanitizer tests (Ubuntu clang)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Sanitizer test
+        run: make CC=clang sanitize
+
+      - name: UndefinedBehaviorSanitizer test
+        run: make CC=clang sanitize-undefined
+
       - name: Upload executable
         uses: actions/upload-artifact@v4
         with:

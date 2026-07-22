@@ -102,6 +102,33 @@ make test
 make install PREFIX=$HOME/.local
 ```
 
+Audit-oriented targets are optional and not used for release binaries:
+
+```sh
+make strict
+make sanitize
+make sanitize-undefined
+make analyze
+make fuzz-smoke
+```
+
+On Linux, `make sanitize` uses AddressSanitizer plus UndefinedBehaviorSanitizer. On macOS, the default target uses UndefinedBehaviorSanitizer because Apple Clang's AddressSanitizer runtime can require host support that is not available in restricted runners. `make sanitize-undefined` is explicitly UBSan-only on all platforms.
+
+## Security and Robustness
+
+`cping` treats command-line operands, terminal state, environment, and all child `ping` output as untrusted.
+
+- It starts `ping` without a shell and passes a fixed argument vector.
+- Release builds resolve `ping` from trusted system paths: `/sbin/ping`, `/usr/sbin/ping`, `/bin/ping`, then `/usr/bin/ping`. The current directory and arbitrary `PATH` entries are not searched.
+- Host operands must not be empty, start with `-`, contain whitespace/control bytes, or exceed the bounded operand length. Displayed host text is sanitized before terminal output.
+- Child output is line-assembled with a fixed 4096-byte logical-line limit. Overlong lines are discarded until the next newline and are not parsed as replies.
+- The parser rejects embedded NUL bytes, malformed RTT fields, non-finite values, negative values, and implausibly large RTT values. It does not print child-controlled output into the dashboard.
+- Statistics are maintained online using Welford's algorithm and report sample standard deviation without storing every RTT sample.
+- Signal handlers only set flags. Shutdown, terminal restoration, child termination, and reaping happen in normal control flow.
+- `SIGPIPE`/`EPIPE` from closed output consumers is treated as expected shutdown.
+
+Remaining limitations: `cping` still delegates network probing to the platform `ping` implementation and only parses common macOS/Linux reply formats. It does not formally verify terminal emulators, platform `ping` behavior, or descendants spawned by a malicious replacement executable.
+
 ## Demo
 
 The README preview lives at `docs/demo.svg`. To record a fresh one:

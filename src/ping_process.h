@@ -5,7 +5,7 @@
 
 typedef struct {
     double interval;
-    long count;
+    unsigned long count;
     double timeout;
     int force_ipv4;
     int force_ipv6;

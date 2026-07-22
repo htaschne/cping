@@ -1,0 +1,2 @@
+64 bytes from host: icmp_seq=8 ttl=64 time=1
+partial

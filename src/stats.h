@@ -12,7 +12,7 @@ typedef struct {
 } Stats;
 
 void stats_init(Stats *stats);
-void stats_add(Stats *stats, double value);
+int stats_add(Stats *stats, double value);
 double stats_stddev(const Stats *stats);
 
 #endif
